@@ -52,15 +52,15 @@ runs:
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ inputs.aws_role_arn }}
-        role-session-name: GitHubActions-StrandsLabeller-${{ github.run_id }}
+        role-session-name: GitHubActions-StrandsAgent-${{ github.run_id }}
         aws-region: us-west-2
         mask-aws-account-id: true
-        inline-session-policy: >-
+        inline_session_policy: >-
           {
             "Version": "2012-10-17",
             "Statement": [
               {
-                "Sid":"Bedrock Access",
+                "Sid":"BedrockAccess",
                 "Effect": "Allow",
                 "Action": [
                   "bedrock:InvokeModelWithResponseStream",
