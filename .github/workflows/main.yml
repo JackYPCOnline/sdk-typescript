@@ -1,0 +1,30 @@
+name: Test Issue Labeller
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_issue_number:
+        description: 'Issue number to test labelling on'
+        required: true
+        default: '1'
+
+jobs:
+  test-labeller:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Test labeller action
+        uses: ./.github/actions/strands-task-labeller
+        with:
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          sessions_bucket: ${{ secrets.TYPESCRIPT_SESSIONS_BUCKET }}
+        env:
+          ISSUE_NUMBER: ${{ inputs.test_issue_number }}
+          ISSUE_TITLE: "Test TypeScript compilation issue"
+          ISSUE_BODY: "Getting Bedrock timeout errors when using OpenAI model provider. This is a critical production bug."
+          ISSUE_USER: "test-user"
+          REPOSITORY_NAME: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
