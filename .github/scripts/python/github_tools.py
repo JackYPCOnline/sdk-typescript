@@ -930,4 +930,33 @@ def search_similar_issues(query: str, state: str = "all", limit: int = 5, repo: 
         return error_msg
 
 
+@tool
+@log_inputs
+def list_repository_labels(repo: str | None = None) -> str:
+    """Lists all available labels in the repository.
+
+    Args:
+        repo: GitHub repository in the format "owner/repo" (optional; falls back to env var)
+
+    Returns:
+        List of available label names
+    """
+    result = _github_request("GET", "labels", repo)
+    if isinstance(result, str):
+        console.print(Panel(escape(result), title="[bold red]Error", border_style="red"))
+        return result
+
+    if not result:
+        message = f"No labels found in {repo or os.environ.get('GITHUB_REPOSITORY')}"
+        console.print(Panel(escape(message), title="[bold yellow]Info", border_style="yellow"))
+        return message
+
+    label_names = [label["name"] for label in result]
+    output = f"Available labels in {repo or os.environ.get('GITHUB_REPOSITORY')}:\n"
+    output += ", ".join(label_names)
+
+    console.print(Panel(escape(output), title="[bold green]🏷️ Repository Labels", border_style="blue"))
+    return output
+
+
 
