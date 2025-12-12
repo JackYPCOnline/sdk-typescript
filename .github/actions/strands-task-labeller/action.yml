@@ -125,9 +125,9 @@ Use ONLY these labels from the repository: dependencies, javascript, bug, docume
 
 ## Area Expert Assignment Rules
 - Match issue content to technical areas (typescript, bedrock, openai, mcp, etc.)
-- Tag specific experts based on the area_experts configuration
+- Tag ONLY the 2 most relevant experts based on the area_experts configuration
 - Use @username format for mentions
-- Group related experts in single comment when appropriate
+- Prioritize experts most closely related to the specific issue content
 
 ## Area Expert Matching
 Match issue content to these technical areas and tag corresponding experts:
@@ -145,7 +145,7 @@ Match issue content to these technical areas and tag corresponding experts:
 - Post a single comment with expert mentions that includes:
   - Brief issue summary
   - Priority assessment with reasoning
-  - Expert mentions with context: "CC @expert1 for [specific area] - [brief reason why they are needed]"
+  - Expert mentions (MAX 2 people): "CC @expert1 @expert2 for [specific area] - [brief reason why they are needed]"
   - Clear action items or next steps
 - Keep comments professional but informative
 - For TypeScript issues: Only tag TypeScript experts if the issue is specifically about TypeScript compilation, syntax, or type errors (not just because this is a TypeScript project)
