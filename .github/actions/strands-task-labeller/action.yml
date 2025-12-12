@@ -108,10 +108,10 @@ runs:
 
 ## Process
 1. First, search for similar issues using search_similar_issues tool to understand context
-2. Get available repository labels using GitHub API
+2. Get available repository labels using list_repository_labels tool
 3. Read the automation configuration from .github/config/automation-config.json for area experts
 4. Analyze the issue title, description, and any provided context
-5. Apply appropriate labels using GitHub tools
+5. Apply ONLY existing labels from step 2 using add_labels_to_issue tool
 6. Tag relevant area experts with @mentions in a comment
 
 ## Similar Issues Analysis
@@ -121,8 +121,10 @@ runs:
 - Reference similar issues in your summary if relevant
 
 ## Label Assignment
-- Use list_issues or GitHub API to get available repository labels dynamically
-- Apply labels that match the issue content (bug, enhancement, documentation, etc.)
+- CRITICAL: Use list_repository_labels tool FIRST to get available labels
+- ONLY apply labels that exist in the repository - NEVER create new labels
+- Match issue content to existing labels (bug, enhancement, documentation, etc.)
+- If no perfect match exists, choose the closest existing label
 - Focus on categorization labels that help with organization
 
 ## Area Expert Assignment Rules
