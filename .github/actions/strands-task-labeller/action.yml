@@ -78,13 +78,13 @@ runs:
                   "s3:DeleteObject"
                 ],
                 "Resource": [
-                  "arn:aws:s3:::*"
+                  "arn:aws:s3:::strands-typescript-project-sessions/*",
                 ]
               }, {
                 "Effect": "Allow",
                 "Action": "s3:ListBucket",
                 "Resource": [
-                  "arn:aws:s3:::*"
+                  "arn:aws:s3:::strands-typescript-project-sessions",
                 ]
               }
             ]
