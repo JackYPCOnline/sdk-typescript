@@ -841,3 +841,330 @@ def get_pr_review_and_comments(pr_number: int, show_resolved: bool = False, repo
         error_msg = f"Error: {e!s}\n\nStack trace:\n{traceback.format_exc()}"
         console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
         return error_msg
+
+@tool
+@log_inputs
+@check_should_call_write_api_or_record
+def add_labels_to_issue(issue_number: int, labels: list[str], repo: str | None = None) -> str:
+    """Adds labels to an issue.
+
+    Args:
+        issue_number: The issue number
+        labels: List of label names to add
+        repo: GitHub repository in the format "owner/repo" (optional; falls back to env var)
+
+    Returns:
+        Result of the operation
+    """
+    result = _github_request("POST", f"issues/{issue_number}/labels", repo, {"labels": labels})
+    if isinstance(result, str):
+        console.print(Panel(escape(result), title="[bold red]Error", border_style="red"))
+        return result
+
+    message = f"Labels {labels} added to issue #{issue_number}"
+    console.print(Panel(escape(message), title="[bold green]Success", border_style="green"))
+    return message
+
+
+@tool
+@log_inputs
+@check_should_call_write_api_or_record
+def set_issue_project_field(issue_number: int, field_name: str, field_value: str, repo: str | None = None) -> str:
+    """Sets a custom field value for an issue in GitHub Projects v2.
+    If the issue is not in a project, it will try to add it to the first available project.
+
+    Args:
+        issue_number: The issue number
+        field_name: The project field name (e.g., "Priority")
+        field_value: The field value (e.g., "Sev2", "High", etc.)
+        repo: GitHub repository in the format "owner/repo" (optional; falls back to env var)
+
+    Returns:
+        Result of the operation
+    """
+    if repo is None:
+        repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return "Error: GITHUB_REPOSITORY environment variable not found"
+
+    # Use PAT_TOKEN for Projects API if available, fallback to GITHUB_TOKEN
+    token = os.environ.get("PAT_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return "Error: Neither PAT_TOKEN nor GITHUB_TOKEN environment variable found"
+
+    owner, repo_name = repo.split("/")
+    
+    try:
+        console.print(Panel(f"Starting project field update for issue #{issue_number}, field '{field_name}' = '{field_value}'", title="[bold blue]Debug: Starting", border_style="blue"))
+        console.print(Panel(f"Using token: {'PAT_TOKEN' if os.environ.get('PAT_TOKEN') else 'GITHUB_TOKEN'}", title="[bold blue]Debug: Token", border_style="blue"))
+        
+        # Step 1: Get issue and available projects
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              id
+              projectItems(first: 10) {
+                nodes {
+                  id
+                  project {
+                    id
+                    title
+                    fields(first: 20) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            projectsV2(first: 10) {
+              nodes {
+                id
+                title
+                fields(first: 20) {
+                  nodes {
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                      options {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          user(login: $owner) {
+            projectsV2(first: 10) {
+              nodes {
+                id
+                title
+                fields(first: 20) {
+                  nodes {
+                    ... on ProjectV2SingleSelectField {
+                      id
+                      name
+                      options {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        
+        response = requests.post(
+            "https://api.github.com/graphql",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": query, "variables": {"owner": owner, "repo": repo_name, "number": issue_number}},
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        console.print(Panel(f"GraphQL Response Status: {response.status_code}", title="[bold blue]Debug: Response", border_style="blue"))
+        
+        if "errors" in data:
+            console.print(Panel(f"GraphQL Errors: {data['errors']}", title="[bold red]Debug: GraphQL Errors", border_style="red"))
+            return f"GraphQL Error: {data['errors']}"
+        
+        issue_data = data["data"]["repository"]["issue"]
+        issue_id = issue_data["id"]
+        project_items = issue_data["projectItems"]["nodes"]
+        
+        # Get all available projects (repo + user)
+        repo_projects = data["data"]["repository"]["projectsV2"]["nodes"]
+        user_projects = data["data"]["user"]["projectsV2"]["nodes"] if data["data"]["user"] else []
+        all_projects = repo_projects + user_projects
+        
+        # Debug logging
+        console.print(Panel(f"Found {len(repo_projects)} repo projects, {len(user_projects)} user projects", title="[bold blue]Debug: Projects Found", border_style="blue"))
+        for i, project in enumerate(all_projects):
+            try:
+                field_names = [field.get("name", "NO_NAME") for field in project.get("fields", {}).get("nodes", [])]
+                console.print(Panel(f"Project {i}: {project.get('title', 'NO_TITLE')} - Fields: {field_names}", title="[bold blue]Debug: Project Fields", border_style="blue"))
+                console.print(Panel(f"Project {i} raw data: {project}", title="[bold blue]Debug: Raw Project", border_style="blue"))
+            except Exception as e:
+                console.print(Panel(f"Error processing project {i}: {e}", title="[bold red]Debug: Project Error", border_style="red"))
+        
+        project_item_id = None
+        target_project = None
+        field_id = None
+        option_id = None
+        
+        # Check if issue is already in a project with the field
+        for item in project_items:
+            project = item["project"]
+            for field in project["fields"]["nodes"]:
+                if not field or "name" not in field:
+                    continue
+                if field["name"] == field_name:
+                    field_id = field["id"]
+                    project_item_id = item["id"]
+                    target_project = project
+                    # Find the option ID for the field value
+                    for option in field["options"]:
+                        if option["name"] == field_value:
+                            option_id = option["id"]
+                            break
+                    break
+            if field_id:
+                break
+        
+        # If not in a project with the field, find a suitable project and add the issue
+        if not project_item_id:
+            for project in all_projects:
+                for field in project["fields"]["nodes"]:
+                    if not field or "name" not in field:
+                        continue
+                    if field["name"] == field_name:
+                        target_project = project
+                        field_id = field["id"]
+                        # Find the option ID for the field value
+                        for option in field["options"]:
+                            if option["name"] == field_value:
+                                option_id = option["id"]
+                                break
+                        break
+                if target_project:
+                    break
+            
+            if not target_project:
+                return f"No project found with field '{field_name}'"
+            
+            # Add issue to project
+            add_mutation = """
+            mutation($input: AddProjectV2ItemByIdInput!) {
+              addProjectV2ItemById(input: $input) {
+                item {
+                  id
+                }
+              }
+            }
+            """
+            
+            add_input = {
+                "projectId": target_project["id"],
+                "contentId": issue_id
+            }
+            
+            response = requests.post(
+                "https://api.github.com/graphql",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"query": add_mutation, "variables": {"input": add_input}},
+                timeout=30
+            )
+            response.raise_for_status()
+            add_result = response.json()
+            
+            if "errors" in add_result:
+                return f"Error adding issue to project: {add_result['errors']}"
+            
+            project_item_id = add_result["data"]["addProjectV2ItemById"]["item"]["id"]
+            
+            # Store Status field info for later update
+            status_field_id = None
+            todo_option_id = None
+            for field in target_project["fields"]["nodes"]:
+                if not field or "name" not in field:
+                    continue
+                if field["name"] == "Status":
+                    status_field_id = field["id"]
+                    for option in field.get("options", []):
+                        if option.get("name") in ["Todo", "ToDo", "To Do", "Backlog"]:
+                            todo_option_id = option["id"]
+                            break
+                    break
+        
+        if not option_id:
+            return f"Could not find option '{field_value}' for field '{field_name}'"
+        
+        # Step 2: Update the project field
+        update_mutation = """
+        mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+          updateProjectV2ItemFieldValue(input: $input) {
+            projectV2Item {
+              id
+            }
+          }
+        }
+        """
+        
+        update_input = {
+            "projectId": target_project["id"],
+            "itemId": project_item_id,
+            "fieldId": field_id,
+            "value": {
+                "singleSelectOptionId": option_id
+            }
+        }
+        
+        response = requests.post(
+            "https://api.github.com/graphql",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": update_mutation, "variables": {"input": update_input}},
+            timeout=30
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        if "errors" in result:
+            return f"GraphQL Mutation Error: {result['errors']}"
+        
+        # Finally, set Status to Todo at the very end
+        if status_field_id and todo_option_id:
+            status_mutation = """
+            mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+              updateProjectV2ItemFieldValue(input: $input) {
+                projectV2Item {
+                  id
+                }
+              }
+            }
+            """
+            
+            status_input = {
+                "projectId": target_project["id"],
+                "itemId": project_item_id,
+                "fieldId": status_field_id,
+                "value": {
+                    "singleSelectOptionId": todo_option_id
+                }
+            }
+            
+            requests.post(
+                "https://api.github.com/graphql",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"query": status_mutation, "variables": {"input": status_input}},
+                timeout=30
+            )
+        
+        message = f"Successfully set project field '{field_name}' to '{field_value}' for issue #{issue_number} in project '{target_project['title']}'" 
+        console.print(Panel(escape(message), title="[bold green]Project Field Updated", border_style="green"))
+        return message
+        
+    except Exception as e:
+        error_msg = f"Error setting project field: {e!s}"
+        console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
+        return error_msg
+
+
+@tool
+@log_inputs
+def assign_area_experts(issue_number: int, repo: str | None = None) -> str:
+    """Assigns area experts to a PR."""
