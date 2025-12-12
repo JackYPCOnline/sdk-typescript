@@ -144,16 +144,5 @@
       "name": "Constraints Engine",
       "github_usernames": ["dbschmigelski"]
     }
-  },
-  "labels": {
-    "available": ["dependencies", "javascript", "bug", "documentation", "duplicate", "enhancement", "github_actions", "good first issue", "help wanted", "implement-task", "invalid", "project-task", "question", "review-task", "wontfix"]
-  },
-  "priority_levels": ["Sev2", "On-Call", "High", "Medium", "Low", "N/A"],
-  "priority_rules": {
-    "sev2_keywords": ["crash", "security", "data loss", "production down", "critical bug","high priority bug"],
-    "oncall_keywords": ["urgent", "blocking", "production issue","critical bug","high priority bug"],
-    "high_keywords": ["performance", "regression", "breaking change", "important","high customer impact","block users"],
-    "medium_keywords": ["improvement", "enhancement", "feature request"],
-    "low_keywords": ["documentation", "typo", "cleanup", "minor"]
   }
 }

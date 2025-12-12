@@ -30,7 +30,7 @@ from github_tools import (
     list_issues,
     list_pull_requests,
     reply_to_review_comment,
-    set_issue_project_field,
+    search_similar_issues,
     update_issue,
     update_pull_request,
 )
@@ -65,8 +65,8 @@ def _get_all_tools() -> list[Any]:
         list_issues,
         add_issue_comment,
         add_labels_to_issue,
-        set_issue_project_field,
         get_issue_comments,
+        search_similar_issues,
         
         # GitHub PR tools
         create_pull_request,
