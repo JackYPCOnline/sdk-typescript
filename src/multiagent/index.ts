@@ -34,3 +34,6 @@ export { Swarm } from './swarm.js'
 export type { SwarmConfig, SwarmNodeDefinition, SwarmOptions } from './swarm.js'
 
 export type { MultiAgentPlugin } from './plugins.js'
+
+export { takeSnapshot, loadSnapshot } from './snapshot.js'
+export type { MultiAgentSnapshotPreset, TakeMultiAgentSnapshotOptions } from './snapshot.js'

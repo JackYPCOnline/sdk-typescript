@@ -1,5 +1,8 @@
 import { AppState } from '../app-state.js'
 import type { ContentBlock } from '../types/messages.js'
+import { contentBlockFromData } from '../types/messages.js'
+import { normalizeError } from '../errors.js'
+import type { JSONValue } from '../types/json.js'
 import type { z } from 'zod'
 
 /**
@@ -57,6 +60,29 @@ export class NodeResult {
     if ('error' in data) this.error = data.error
     if ('structuredOutput' in data) this.structuredOutput = data.structuredOutput
   }
+
+  toJSON(): JSONValue {
+    return {
+      nodeId: this.nodeId,
+      status: this.status,
+      duration: this.duration,
+      content: this.content.map((block) => block.toJSON()),
+      ...(this.error && { error: this.error.message }),
+      ...(this.structuredOutput !== undefined && { structuredOutput: this.structuredOutput as JSONValue }),
+    } as JSONValue
+  }
+
+  static fromJSON(data: JSONValue): NodeResult {
+    const d = data as Record<string, JSONValue>
+    return new NodeResult({
+      nodeId: d.nodeId as string,
+      status: d.status as ResultStatus,
+      duration: d.duration as number,
+      content: (d.content as JSONValue[]).map((c) => contentBlockFromData(c as never)),
+      ...(d.error && { error: normalizeError(d.error) }),
+      ...(d.structuredOutput !== undefined && { structuredOutput: d.structuredOutput }),
+    })
+  }
 }
 
 /**
@@ -92,6 +118,27 @@ export class NodeState {
     const last = this.results[this.results.length - 1]
     return last?.content ?? []
   }
+
+  toJSON(): JSONValue {
+    return {
+      status: this.status,
+      terminus: this.terminus,
+      startTime: this.startTime,
+      results: this.results.map((res) => res.toJSON()),
+    } as JSONValue
+  }
+
+  static fromJSON(data: JSONValue): NodeState {
+    const d = data as Record<string, JSONValue>
+    const state = new NodeState()
+    state.status = d.status as Status
+    state.terminus = d.terminus as boolean
+    state.startTime = d.startTime as number
+    for (const r of d.results as JSONValue[]) {
+      state.results.push(NodeResult.fromJSON(r))
+    }
+    return state
+  }
 }
 
 /**
@@ -118,6 +165,27 @@ export class MultiAgentResult {
     this.content = data.content ?? []
     this.duration = data.duration
     if ('error' in data) this.error = data.error
+  }
+
+  toJSON(): JSONValue {
+    return {
+      status: this.status,
+      results: this.results.map((r) => r.toJSON()),
+      content: this.content.map((block) => block.toJSON()),
+      duration: this.duration,
+      ...(this.error && { error: this.error.message }),
+    } as JSONValue
+  }
+
+  static fromJSON(data: JSONValue): MultiAgentResult {
+    const d = data as Record<string, JSONValue>
+    return new MultiAgentResult({
+      status: d.status as ResultStatus,
+      results: (d.results as JSONValue[]).map(NodeResult.fromJSON),
+      content: (d.content as JSONValue[]).map((c) => contentBlockFromData(c as never)),
+      duration: d.duration as number,
+      ...(d.error && { error: normalizeError(d.error) }),
+    })
   }
 
   /** Derives the aggregate status from individual node results. */
@@ -171,5 +239,37 @@ export class MultiAgentState {
    */
   get nodes(): ReadonlyMap<string, NodeState> {
     return this._nodes
+  }
+
+  toJSON(): JSONValue {
+    const nodes: Record<string, JSONValue> = {}
+    for (const [id, ns] of this._nodes) {
+      nodes[id] = ns.toJSON()
+    }
+    return {
+      startTime: this.startTime,
+      steps: this.steps,
+      results: this.results.map((r) => r.toJSON()),
+      app: this.app.toJSON(),
+      nodes,
+    } as JSONValue
+  }
+
+  static fromJSON(data: JSONValue): MultiAgentState {
+    const d = data as Record<string, JSONValue>
+    const state = new MultiAgentState()
+    ;(state as { startTime: number }).startTime = d.startTime as number
+    state.steps = d.steps as number
+    for (const r of d.results as JSONValue[]) {
+      state.results.push(NodeResult.fromJSON(r))
+    }
+    state.app.loadStateFromJson(d.app as JSONValue)
+    const nodes = d.nodes as Record<string, JSONValue> | undefined
+    if (nodes) {
+      for (const [id, nsData] of Object.entries(nodes)) {
+        state._nodes.set(id, NodeState.fromJSON(nsData))
+      }
+    }
+    return state
   }
 }
