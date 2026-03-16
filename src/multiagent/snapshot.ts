@@ -27,10 +27,10 @@ import { logger } from '../logging/logger.js'
  * Multi-agent snapshot presets.
  *
  * - `session` — lightweight: orchestratorId + MultiAgentState only.
- *   Sufficient for resume since agent nodes are isolated per-execution
- *   and handoff/routing can be reconstructed from state.results.
+ *   Placeholder for future session manager integration; additional fields
+ *   (e.g. currentNodeId, routing state) will be added as needed.
  *
- * - `full` — everything: orchestratorId + MultiAgentState + per-node agent snapshots.
+ * - `full` (default) — everything: orchestratorId + MultiAgentState + per-node agent snapshots.
  *   For checkpointing, debugging, or preserving agent base state across runs.
  *   Nested MultiAgentNodes are snapshotted recursively. Their execution state
  *   is ephemeral (created per stream() call), so only agent base states and
@@ -43,7 +43,7 @@ export type MultiAgentSnapshotPreset = 'session' | 'full'
  * Options for taking a multi-agent snapshot.
  */
 export interface TakeMultiAgentSnapshotOptions {
-  /** Preset controlling what to capture. Defaults to 'session'. */
+  /** Preset controlling what to capture. Defaults to 'full'. */
   preset?: MultiAgentSnapshotPreset
   /** Application-owned data. Strands does not read or modify this. */
   appData?: Record<string, JSONValue>
@@ -68,7 +68,7 @@ export function takeSnapshot(
   state?: MultiAgentState,
   options: TakeMultiAgentSnapshotOptions = {}
 ): Snapshot {
-  const preset = options.preset ?? 'session'
+  const preset = options.preset ?? 'full'
 
   const data: Record<string, JSONValue> = {
     orchestratorId: orchestrator.id,

@@ -57,7 +57,7 @@ describe('multiagent snapshot', () => {
   })
 
   describe('takeSnapshot', () => {
-    it('creates session snapshot with orchestratorId and state', () => {
+    it('creates snapshot with orchestratorId, state, and node snapshots by default', () => {
       const graph = makeGraph('my-graph', ['a', 'b'])
       const state = makeState(['a', 'b'])
 
@@ -68,14 +68,24 @@ describe('multiagent snapshot', () => {
       expect(snapshot.createdAt).toBe(MOCK_TIMESTAMP)
       expect(snapshot.data.orchestratorId).toBe('my-graph')
       expect(snapshot.data.state).toBeDefined()
-      expect(snapshot.data.nodes).toBeUndefined()
+      expect(snapshot.data.nodes).toBeDefined()
       expect(snapshot.appData).toEqual({})
     })
 
-    it('defaults to session preset', () => {
+    it('defaults to full preset', () => {
       const graph = makeGraph('g', ['a'])
 
       const snapshot = takeSnapshot(graph, makeState(['a']))
+
+      const nodes = getNodeSnapshots(snapshot)
+      expect(nodes).toBeDefined()
+      expect(nodes['a']!.scope).toBe('agent')
+    })
+
+    it('session preset omits node snapshots', () => {
+      const graph = makeGraph('g', ['a'])
+
+      const snapshot = takeSnapshot(graph, makeState(['a']), { preset: 'session' })
 
       expect(snapshot.data.nodes).toBeUndefined()
     })
