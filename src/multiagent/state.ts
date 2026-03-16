@@ -1,5 +1,5 @@
 import { AppState } from '../app-state.js'
-import type { ContentBlock } from '../types/messages.js'
+import type { ContentBlock, ContentBlockData } from '../types/messages.js'
 import { contentBlockFromData } from '../types/messages.js'
 import { normalizeError } from '../errors.js'
 import type { JSONValue } from '../types/json.js'
@@ -78,7 +78,7 @@ export class NodeResult {
       nodeId: d.nodeId as string,
       status: d.status as ResultStatus,
       duration: d.duration as number,
-      content: (d.content as JSONValue[]).map((c) => contentBlockFromData(c as never)),
+      content: (d.content as unknown as ContentBlockData[]).map(contentBlockFromData),
       ...(d.error && { error: normalizeError(d.error) }),
       ...(d.structuredOutput !== undefined && { structuredOutput: d.structuredOutput }),
     })
@@ -182,7 +182,7 @@ export class MultiAgentResult {
     return new MultiAgentResult({
       status: d.status as ResultStatus,
       results: (d.results as JSONValue[]).map(NodeResult.fromJSON),
-      content: (d.content as JSONValue[]).map((c) => contentBlockFromData(c as never)),
+      content: (d.content as unknown as ContentBlockData[]).map(contentBlockFromData),
       duration: d.duration as number,
       ...(d.error && { error: normalizeError(d.error) }),
     })
@@ -258,6 +258,8 @@ export class MultiAgentState {
   static fromJSON(data: JSONValue): MultiAgentState {
     const d = data as Record<string, JSONValue>
     const state = new MultiAgentState()
+    // Bypass readonly for deserialization — startTime is set once at construction
+    // and must be restored to the original value from the snapshot.
     ;(state as { startTime: number }).startTime = d.startTime as number
     state.steps = d.steps as number
     for (const r of d.results as JSONValue[]) {
