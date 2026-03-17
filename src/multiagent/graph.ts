@@ -1,6 +1,6 @@
 import type { InvokableAgent, InvokeArgs } from '../types/agent.js'
-import type { ContentBlock } from '../types/messages.js'
-import { TextBlock } from '../types/messages.js'
+import type { ContentBlock, ContentBlockData } from '../types/messages.js'
+import { Message, TextBlock, contentBlockFromData } from '../types/messages.js'
 import { HookableEvent } from '../hooks/events.js'
 import { HookRegistryImplementation } from '../hooks/registry.js'
 import type { HookCallback, HookableEventConstructor, HookCleanup } from '../hooks/types.js'
@@ -447,8 +447,27 @@ export class Graph implements MultiAgent {
 
     if (deps.length === 0) return input
 
-    const blocks: ContentBlock[] = typeof input === 'string' ? [new TextBlock(input)] : (input as ContentBlock[])
+    const blocks: ContentBlock[] = typeof input === 'string' ? [new TextBlock(input)] : this._toContentBlocks(input)
     return [...blocks, ...deps]
+  }
+
+  /**
+   * Extracts ContentBlock[] from any non-string InvokeArgs variant.
+   */
+  private _toContentBlocks(input: Exclude<InvokeArgs, string>): ContentBlock[] {
+    if (!Array.isArray(input) || input.length === 0) return []
+
+    const first = input[0]!
+    if ('role' in first && typeof first.role === 'string') {
+      // Message[] or MessageData[]
+      return (input as (Message | { role: string; content: (ContentBlock | ContentBlockData)[] })[]).flatMap((msg) =>
+        msg instanceof Message
+          ? msg.content
+          : msg.content.map((b) => ('type' in b ? (b as ContentBlock) : contentBlockFromData(b as ContentBlockData)))
+      )
+    }
+    // ContentBlock[] or ContentBlockData[]
+    return input.map((b) => ('type' in b ? (b as ContentBlock) : contentBlockFromData(b as ContentBlockData)))
   }
 
   private _checkSteps(state: MultiAgentState): void {

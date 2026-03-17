@@ -3,7 +3,7 @@ import { Agent } from '../../agent/agent.js'
 import { MockMessageModel } from '../../__fixtures__/mock-message-model.js'
 import { collectGenerator } from '../../__fixtures__/model-test-helpers.js'
 import { AfterNodeCallEvent, BeforeNodeCallEvent, MultiAgentInitializedEvent } from '../events.js'
-import { TextBlock } from '../../types/messages.js'
+import { Message, TextBlock } from '../../types/messages.js'
 import { Status, MultiAgentState } from '../state.js'
 import { AgentNode, MultiAgentNode } from '../nodes.js'
 import { Graph } from '../graph.js'
@@ -313,6 +313,30 @@ describe('Graph', () => {
       expect(streamSpy).toHaveBeenCalled()
       const input = streamSpy.mock.calls[0]![0] as TextBlock[]
       expect(input.map((b) => b.text)).toStrictEqual(['task-input', '[node: a]', 'from-a'])
+    })
+
+    it('passes task + dependency content to downstream nodes with Message[] input', async () => {
+      const agentB = makeAgent('b')
+      const streamSpy = vi.spyOn(agentB, 'stream')
+
+      const graph = new Graph({
+        nodes: [makeAgent('a', 'from-a'), agentB],
+        edges: [['a', 'b']],
+      })
+
+      const messageInput = [new Message({ role: 'user', content: [new TextBlock('task-input')] })]
+      await graph.invoke(messageInput)
+
+      expect(streamSpy).toHaveBeenCalled()
+      const input = streamSpy.mock.calls[0]![0] as (TextBlock | Message)[]
+
+      // Every element passed to the downstream node should be a ContentBlock,
+      // not a Message. Before the fix, Message objects were cast as ContentBlock[]
+      // and spread into the array alongside dependency TextBlocks.
+      for (const block of input) {
+        expect(block).not.toBeInstanceOf(Message)
+      }
+      expect(input.map((b) => (b as TextBlock).text)).toContain('task-input')
     })
 
     it('returns failed result when agent throws', async () => {
