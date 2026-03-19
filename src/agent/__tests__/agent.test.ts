@@ -1191,6 +1191,28 @@ describe('Agent', () => {
       expect(result.structuredOutput).toEqual({ items: ['a', 'b', 'c'] })
     })
 
+    it('exits loop when model voluntarily calls structured output tool with valid input', async () => {
+      const schema = z.object({ name: z.string(), age: z.number() })
+
+      // Model calls structured output tool voluntarily (stopReason will be 'toolUse')
+      // This should exit the loop after one cycle since the structured output is valid
+      const model = new MockMessageModel().addTurn({
+        type: 'toolUseBlock',
+        name: 'strands_structured_output',
+        toolUseId: 'tool-1',
+        input: { name: 'John', age: 30 },
+      })
+
+      const agent = new Agent({ model, structuredOutputSchema: schema })
+
+      const result = await agent.invoke('Test')
+
+      // Loop should exit after 1 cycle with valid structured output
+      expect(result.structuredOutput).toEqual({ name: 'John', age: 30 })
+      expect(result.stopReason).toBe('toolUse')
+      expect(result.metrics?.cycleCount).toBe(1)
+    })
+
     it('uses per-invocation override schema and restores constructor schema on next call', async () => {
       const constructorSchema = z.object({ name: z.string() })
       const overrideSchema = z.object({ value: z.number() })
