@@ -565,6 +565,26 @@ export class Agent implements LocalAgent, InvokableAgent {
           yield this._appendMessage(modelResult.message)
           yield this._appendMessage(toolResultMessage)
 
+          // Exit loop if structured output is satisfied after tool execution.
+          // This handles models (e.g., OpenAI) that voluntarily call the structured
+          // output tool instead of being forced. When the tool stores a valid result,
+          // we exit immediately rather than continuing the loop.
+          // Note: We also check context.isEnabled to avoid exiting early for agents
+          // without structured output (NullStructuredOutputContext.hasResult() is always true).
+          if (context.isEnabled && context.hasResult()) {
+            this._meter.endCycle(cycleStartTime)
+            this._tracer.endAgentLoopSpan(cycleSpan)
+
+            const structuredOutput = context.getResult()
+            result = new AgentResult({
+              stopReason: modelResult.stopReason,
+              lastMessage: modelResult.message,
+              structuredOutput,
+              metrics: this._meter.metrics,
+            })
+            return result
+          }
+
           // End cycle tracking
           this._meter.endCycle(cycleStartTime)
 
