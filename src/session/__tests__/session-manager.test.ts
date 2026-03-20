@@ -11,13 +11,14 @@ import {
 import { Agent } from '../../agent/agent.js'
 import { Message, TextBlock } from '../../types/messages.js'
 import { createMockAgent as createMockAgentWithHooks, invokeTrackedHook } from '../../__fixtures__/agent-helpers.js'
+import { loadStateFromJSONSymbol, stateToJSONSymbol } from '../../types/serializable.js'
 
 // Test fixtures
 function createMockAgent(id = 'agent'): Agent {
   const agent = {
     id,
     messages: [],
-    state: {
+    appState: {
       _m: new Map(),
       get(k: string) {
         return this._m.get(k)
@@ -25,10 +26,10 @@ function createMockAgent(id = 'agent'): Agent {
       set(k: string, v: unknown) {
         this._m.set(k, v)
       },
-      toJSON() {
+      [stateToJSONSymbol]() {
         return Object.fromEntries(this._m)
       },
-      loadStateFromJson(json: Record<string, unknown>) {
+      [loadStateFromJSONSymbol](json: Record<string, unknown>) {
         Object.entries(json).forEach(([k, v]) => this._m.set(k, v))
       },
     } as any,
@@ -330,7 +331,7 @@ describe('SessionManager', () => {
       expect(triggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           agentData: expect.objectContaining({
-            state: mockAgent.state,
+            appState: mockAgent.appState,
             messages: mockAgent.messages,
           }),
         })
@@ -388,7 +389,7 @@ describe('SessionManager', () => {
         sessionId: 'test-session',
         storage: { snapshot: storage },
         saveLatestOn: 'trigger',
-        snapshotTrigger: ({ agentData }) => (agentData.state as any).get('checkpoint') === true,
+        snapshotTrigger: ({ agentData }) => (agentData.appState as any).get('checkpoint') === true,
       })
 
       const pluginAgent = createMockAgentWithHooks()
@@ -400,7 +401,7 @@ describe('SessionManager', () => {
       })
       expect(ids.length).toBe(0) // state not set — no snapshot
 
-      mockAgent.state.set('checkpoint', true)
+      mockAgent.appState.set('checkpoint', true)
       await invokeTrackedHook(pluginAgent, new AfterInvocationEvent(createMockEvent(mockAgent)))
       ids = await storage.listSnapshotIds({
         location: { sessionId: 'test-session', scope: 'agent', scopeId: 'test-agent' },

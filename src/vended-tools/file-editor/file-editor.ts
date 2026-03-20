@@ -47,7 +47,7 @@ class TextFileReader implements IFileReader {
  *
  * @example
  * ```typescript
- * import { fileEditor } from '@strands-agents/sdk/vended_tools/file_editor'
+ * import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor'
  * import { Agent } from '@strands-agents/sdk'
  *
  * const agent = new Agent({
@@ -351,7 +351,7 @@ async function handleStrReplace(
   }
 
   // Perform replacement
-  const newFileContent = fileContent.replace(expandedOldStr, expandedNewStr)
+  const newFileContent = fileContent.replace(expandedOldStr, () => expandedNewStr)
 
   // Write back to file
   await fs.writeFile(filePath, newFileContent, 'utf-8')

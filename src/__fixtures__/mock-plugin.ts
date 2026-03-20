@@ -1,11 +1,13 @@
 import type { HookableEvent } from '../hooks/index.js'
 import type { Plugin } from '../plugins/plugin.js'
-import type { AgentData } from '../types/agent.js'
+import type { LocalAgent } from '../types/agent.js'
 import {
   InitializedEvent,
   BeforeInvocationEvent,
   AfterInvocationEvent,
   MessageAddedEvent,
+  BeforeToolsEvent,
+  AfterToolsEvent,
   BeforeToolCallEvent,
   AfterToolCallEvent,
   BeforeModelCallEvent,
@@ -23,12 +25,14 @@ export class MockPlugin implements Plugin {
     return 'mock-plugin'
   }
 
-  initAgent(agent: AgentData): void {
+  initAgent(agent: LocalAgent): void {
     const eventTypes: HookableEventConstructor[] = [
       InitializedEvent,
       BeforeInvocationEvent,
       AfterInvocationEvent,
       MessageAddedEvent,
+      BeforeToolsEvent,
+      AfterToolsEvent,
       BeforeToolCallEvent,
       AfterToolCallEvent,
       BeforeModelCallEvent,

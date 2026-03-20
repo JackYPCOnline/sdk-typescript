@@ -23,6 +23,7 @@ import {
 } from './streaming.js'
 import { MaxTokensError, ModelError, normalizeError } from '../errors.js'
 import type { Redaction } from '../hooks/events.js'
+import { logger } from '../logging/logger.js'
 
 class CitationAccumulator {
   citations: Citation[] = []
@@ -205,7 +206,7 @@ export abstract class Model<T extends BaseModelConfig = BaseModelConfig> {
       case 'modelRedactionEvent':
         return new ModelRedactionEvent(event_data)
       default:
-        throw new Error(`Unsupported event type: ${event_data}`)
+        throw new Error(`Unsupported event type: ${(event_data as { type: string }).type}`)
     }
   }
 
@@ -255,7 +256,6 @@ export abstract class Model<T extends BaseModelConfig = BaseModelConfig> {
         redactedContent?: Uint8Array
       } = {}
       const accumulatedCitations = new CitationAccumulator()
-      let errorToThrow: Error | undefined = undefined
       let stoppedMessage: Message | null = null
       let finalStopReason: StopReason | null = null
       let metadata: ModelMetadataEvent | undefined = undefined
@@ -336,8 +336,8 @@ export abstract class Model<T extends BaseModelConfig = BaseModelConfig> {
               yield block
             } catch (e: unknown) {
               if (e instanceof SyntaxError) {
-                console.error('Unable to parse JSON string.')
-                errorToThrow = e
+                logger.error('Unable to parse JSON string.', e)
+                throw e
               }
             }
             break
@@ -382,23 +382,15 @@ export abstract class Model<T extends BaseModelConfig = BaseModelConfig> {
 
       if (!stoppedMessage || !finalStopReason) {
         // If we exit the loop without completing a message or stop reason, throw an error
-        throw new ModelError(
-          'Stream ended without completing a message',
-          errorToThrow ? { cause: errorToThrow } : undefined
-        )
+        throw new ModelError('Stream ended without completing a message')
       }
 
       // Handle stop reason
       if (finalStopReason === 'maxTokens') {
-        const maxTokensError = new MaxTokensError(
+        throw new MaxTokensError(
           'Model reached maximum token limit. This is an unrecoverable state that requires intervention.',
           stoppedMessage
         )
-        errorToThrow = maxTokensError
-      }
-
-      if (errorToThrow !== undefined) {
-        throw errorToThrow
       }
 
       // Return the final message with stop reason and optional metadata

@@ -53,9 +53,9 @@ import { logger } from '../logging/logger.js'
 
 /**
  * Default Bedrock model ID.
- * Uses Claude Sonnet 4.5 with global inference profile for cross-region availability.
+ * Uses Claude Sonnet 4 with global inference profile for cross-region availability.
  */
-const DEFAULT_BEDROCK_MODEL_ID = 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
+const DEFAULT_BEDROCK_MODEL_ID = 'global.anthropic.claude-sonnet-4-6'
 
 const DEFAULT_BEDROCK_REGION = 'us-west-2'
 const DEFAULT_BEDROCK_REGION_SUPPORTS_FIP = false
@@ -183,7 +183,7 @@ function snakeToCamel(str: string): string {
  * @example
  * ```typescript
  * const config: BedrockModelConfig = {
- *   modelId: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+ *   modelId: 'global.anthropic.claude-sonnet-4-6',
  *   maxTokens: 1024,
  *   temperature: 0.7,
  *   cacheConfig: { strategy: 'auto' }
@@ -297,7 +297,7 @@ export interface BedrockModelOptions extends BedrockModelConfig {
  * ```typescript
  * const provider = new BedrockModel({
  *   modelConfig: {
- *     modelId: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+ *     modelId: 'global.anthropic.claude-sonnet-4-6',
  *     maxTokens: 1024,
  *     temperature: 0.7
  *   },
@@ -336,7 +336,7 @@ export class BedrockModel extends Model<BedrockModelConfig> {
    * // With model configuration
    * const provider = new BedrockModel({
    *   region: 'us-west-2',
-   *   modelId: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+   *   modelId: 'global.anthropic.claude-sonnet-4-6',
    *   maxTokens: 2048,
    *   temperature: 0.8,
    *   cacheConfig: { strategy: 'auto' }
@@ -736,13 +736,13 @@ export class BedrockModel extends Model<BedrockModelConfig> {
 
       // Bedrock guardrails only support png/jpeg formats
       if (format !== 'png' && format !== 'jpeg') {
-        console.warn(`Image format '${format}' not supported by Bedrock guardrails, skipping guardContent wrap`)
+        logger.warn(`Image format '${format}' not supported by Bedrock guardrails, skipping guardContent wrap`)
         return formattedBlock
       }
 
       // Bedrock guardrails only support bytes source (not S3 or URL)
       if (!('bytes' in imageBlock.source)) {
-        console.warn('Image source must be bytes for Bedrock guardrails, skipping guardContent wrap')
+        logger.warn('Image source must be bytes for Bedrock guardrails, skipping guardContent wrap')
         return formattedBlock
       }
 
@@ -988,15 +988,15 @@ export class BedrockModel extends Model<BedrockModelConfig> {
             },
           }
         }
-        console.warn('Ignoring imageSourceUrl content block as its not supported by bedrock')
+        logger.warn('Ignoring imageSourceUrl content block as its not supported by bedrock')
         return
 
       case 'imageSourceS3Location':
       case 'videoSourceS3Location':
         return {
           s3Location: {
-            uri: source.s3Location.uri,
-            ...(source.s3Location.bucketOwner && { bucketOwner: source.s3Location.bucketOwner }),
+            uri: source.location.uri,
+            ...(source.location.bucketOwner && { bucketOwner: source.location.bucketOwner }),
           },
         }
 
@@ -1038,8 +1038,8 @@ export class BedrockModel extends Model<BedrockModelConfig> {
       case 'documentSourceS3Location':
         return {
           s3Location: {
-            uri: source.s3Location.uri,
-            ...(source.s3Location.bucketOwner && { bucketOwner: source.s3Location.bucketOwner }),
+            uri: source.location.uri,
+            ...(source.location.bucketOwner && { bucketOwner: source.location.bucketOwner }),
           },
         }
 

@@ -1,20 +1,22 @@
-import type { InvokeArgs } from '../agent/agent.js'
+import type { InvokeArgs } from '../types/agent.js'
+import type { Message, MessageData } from '../types/messages.js'
 import type { HookableEvent } from '../hooks/events.js'
 import type { HookCallback, HookableEventConstructor, HookCleanup } from '../hooks/types.js'
 import type { MultiAgentStreamEvent } from './events.js'
 import type { MultiAgentResult } from './state.js'
 
 /**
+ * Input type for multi-agent orchestrators. Excludes `Message[]` and `MessageData[]`
+ * from {@link InvokeArgs} since orchestrators route content blocks between nodes.
+ */
+export type MultiAgentInput = Exclude<InvokeArgs, Message[] | MessageData[]>
+
+/**
  * Interface for any multi-agent orchestrator that can stream execution.
  * Implement this interface to create custom orchestration patterns that can be
  * composed as nodes within other orchestrators via {@link MultiAgentNode}.
  */
-export interface MultiAgentBase {
-  /**
-   * Type discriminator for identifying multi-agent orchestrator instances in union types.
-   */
-  readonly type: 'multiAgent'
-
+export interface MultiAgent {
   /** Unique identifier for this orchestrator. */
   readonly id: string
 
@@ -23,14 +25,14 @@ export interface MultiAgentBase {
    * @param input - Input to pass to the orchestrator
    * @returns The aggregate result from all executed nodes
    */
-  invoke(input: InvokeArgs): Promise<MultiAgentResult>
+  invoke(input: MultiAgentInput): Promise<MultiAgentResult>
 
   /**
    * Execute the orchestrator and stream events as they occur.
    * @param input - Input to pass to the orchestrator
    * @returns Async generator yielding events and returning the final result
    */
-  stream(input: InvokeArgs): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined>
+  stream(input: MultiAgentInput): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined>
 
   /**
    * Register a hook callback for a specific orchestrator event type.

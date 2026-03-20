@@ -3,6 +3,8 @@ import type { ContentBlock, ContentBlockData } from '../types/messages.js'
 import { contentBlockFromData } from '../types/messages.js'
 import { normalizeError } from '../errors.js'
 import type { JSONValue } from '../types/json.js'
+import { StateStore } from '../state-store.js'
+import type { ContentBlock } from '../types/messages.js'
 import type { z } from 'zod'
 
 /**
@@ -207,17 +209,14 @@ export class MultiAgentState {
   /** All node results in completion order. */
   readonly results: NodeResult[]
   /** App-level key-value state accessible from hooks, edge handlers, and custom nodes. */
-  readonly app: AppState
-  /** Structured output schema to apply to node invocations. */
-  readonly structuredOutputSchema?: z.ZodSchema
+  readonly app: StateStore
   private readonly _nodes: Map<string, NodeState>
 
-  constructor(data?: { nodeIds?: string[]; structuredOutputSchema?: z.ZodSchema }) {
+  constructor(data?: { nodeIds?: string[] }) {
     this.startTime = Date.now()
     this.steps = 0
     this.results = []
-    this.app = new AppState()
-    if (data?.structuredOutputSchema) this.structuredOutputSchema = data.structuredOutputSchema
+    this.app = new StateStore()
     this._nodes = new Map()
     for (const id of data?.nodeIds ?? []) {
       this._nodes.set(id, new NodeState())

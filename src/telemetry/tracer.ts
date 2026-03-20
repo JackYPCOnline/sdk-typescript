@@ -41,7 +41,7 @@ import type {
   Usage,
   Metrics,
 } from './types.js'
-import type { ContentBlock, Message } from '../types/messages.js'
+import type { ContentBlock, Message, SystemPrompt } from '../types/messages.js'
 import { jsonReplacer } from './json.js'
 import { getServiceName } from './utils.js'
 
@@ -102,6 +102,13 @@ export class Tracer {
   private _loopSpan: Span | undefined
 
   /**
+   * Whether Langfuse is configured as the OTLP endpoint.
+   * Detected from OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+   * or LANGFUSE_BASE_URL environment variables.
+   */
+  private readonly _isLangfuse: boolean
+
+  /**
    * Initialize the tracer with OpenTelemetry configuration.
    * Reads OTEL_SEMCONV_STABILITY_OPT_IN to determine convention version.
    * Gets tracer from the global API to ensure ground truth - works correctly
@@ -116,6 +123,8 @@ export class Tracer {
     const optInValues = Tracer._parseSemconvOptIn()
     this._useLatestConventions = optInValues.has('gen_ai_latest_experimental')
     this._includeToolDefinitions = optInValues.has('gen_ai_tool_definitions')
+
+    this._isLangfuse = Tracer._detectLangfuse()
 
     // Get tracer from global API to ensure ground truth
     this._tracer = trace.getTracer(getServiceName())
@@ -183,6 +192,12 @@ export class Tracer {
     try {
       const attributes: Record<string, AttributeValue> = {}
       if (accumulatedUsage) this._setUsageAttributes(attributes, accumulatedUsage)
+      // Langfuse auto-generates "generation" observations for spans with token usage,
+      // which duplicates the token counts already reported on this agent span.
+      // Setting observation.type to "span" prevents Langfuse from creating that
+      // extra generation, avoiding double-counted tokens in dashboards.
+      // See https://github.com/langfuse/langfuse/issues/7549
+      if (this._isLangfuse) attributes['langfuse.observation.type'] = 'span'
       if (response !== undefined) this._addResponseEvent(span, response, stopReason)
 
       this._endSpan(span, attributes, error)
@@ -198,7 +213,7 @@ export class Tracer {
    * @param options - Options for starting the model invocation span
    */
   startModelInvokeSpan(options: StartModelInvokeSpanOptions): Span | null {
-    const { messages, modelId } = options
+    const { messages, modelId, systemPrompt } = options
 
     try {
       const attributes = this._getCommonAttributes('chat')
@@ -210,6 +225,7 @@ export class Tracer {
         spanKind: SpanKind.INTERNAL,
         ...(this._loopSpan && { parentSpan: this._loopSpan }),
       })
+      this._addSystemPromptEvent(span, systemPrompt)
       this._addEventMessages(span, messages)
 
       return span
@@ -633,6 +649,68 @@ export class Tracer {
   }
 
   /**
+   * Detect whether Langfuse is configured as the OTLP endpoint.
+   * Checks OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+   * and LANGFUSE_BASE_URL environment variables.
+   */
+  private static _detectLangfuse(): boolean {
+    const env = globalThis.process?.env
+    if (!env) return false
+
+    if (env.LANGFUSE_BASE_URL) return true
+
+    const otlpEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''
+    const tracesEndpoint = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? ''
+    return otlpEndpoint.includes('langfuse') || tracesEndpoint.includes('langfuse')
+  }
+
+  /**
+   * Emit system prompt as a span event per OTel GenAI semantic conventions.
+   * In stable mode, emits a `gen_ai.system.message` event.
+   * In latest experimental mode, emits `gen_ai.system_instructions` on the
+   * `gen_ai.client.inference.operation.details` event.
+   *
+   * @param span - The span to add the event to
+   * @param systemPrompt - The system prompt provided to the model
+   */
+  private _addSystemPromptEvent(span: Span, systemPrompt?: SystemPrompt): void {
+    if (systemPrompt === undefined) return
+
+    if (this._useLatestConventions) {
+      const parts = Tracer._mapSystemPromptToOtelParts(systemPrompt)
+      this._addEvent(span, 'gen_ai.client.inference.operation.details', {
+        'gen_ai.system_instructions': JSON.stringify(parts, jsonReplacer),
+      })
+    } else {
+      // Normalize string prompts to an array of text blocks for consistent format
+      const blocks = typeof systemPrompt === 'string' ? [{ text: systemPrompt }] : systemPrompt
+      this._addEvent(span, 'gen_ai.system.message', {
+        content: JSON.stringify(blocks, jsonReplacer),
+      })
+    }
+  }
+
+  /**
+   * Map a system prompt to OTEL parts format (latest conventions).
+   * Handles both string prompts and SystemContentBlock arrays.
+   */
+  private static _mapSystemPromptToOtelParts(systemPrompt: SystemPrompt): Record<string, unknown>[] {
+    if (typeof systemPrompt === 'string') {
+      return [{ type: 'text', content: systemPrompt }]
+    }
+    return systemPrompt.map((block) => {
+      switch (block.type) {
+        case 'textBlock':
+          return { type: 'text', content: block.text }
+        case 'cachePointBlock':
+          return { type: 'cache_point', cacheType: block.cacheType }
+        case 'guardContentBlock':
+          return { type: 'guard_content', text: block.text, image: block.image }
+      }
+    })
+  }
+
+  /**
    * Map content blocks to OTEL parts format (latest conventions).
    * Converts SDK content block types to OTEL semantic convention format.
    */
@@ -648,7 +726,7 @@ export class Tracer {
         case 'toolResultBlock':
           return { type: 'tool_call_response', id: block.toolUseId, response: block.content }
         default:
-          return block as unknown as Record<string, unknown>
+          return { type: block.type }
       }
     })
   }

@@ -42,7 +42,6 @@ vi.mock('@anthropic-ai/sdk', () => {
 describe('AnthropicModel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.restoreAllMocks()
     if (isNode) {
       vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test-env')
     }
@@ -59,7 +58,7 @@ describe('AnthropicModel', () => {
     it('creates an instance with default configuration', () => {
       const provider = new AnthropicModel({ apiKey: 'sk-ant-test' })
       const config = provider.getConfig()
-      expect(config.modelId).toBe('claude-sonnet-4-5-20250929')
+      expect(config.modelId).toBe('claude-sonnet-4-6')
       expect(config.maxTokens).toBe(4096)
     })
 

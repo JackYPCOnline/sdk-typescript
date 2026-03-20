@@ -1,4 +1,4 @@
-import type { AgentData, AgentResult } from '../types/agent.js'
+import type { LocalAgent, AgentResult } from '../types/agent.js'
 import type { ContentBlock, Message, StopReason, ToolResultBlock } from '../types/messages.js'
 import { type Tool, ToolStreamEvent } from '../tools/tool.js'
 import type { JSONValue } from '../types/json.js'
@@ -7,10 +7,10 @@ import type { ModelStreamEvent } from '../models/streaming.js'
 /**
  * Agent hook events.
  *
- * All events extend {@link StreamEvent} and carry `readonly agent: AgentData` with a
- * `readonly type` discriminator (camelCase of the class name) for switch-based narrowing.
- * Constructor takes a single data-object parameter. All properties are readonly except
- * explicit mutable flags (`retry`).
+ * All events extend {@link StreamEvent} with a `readonly type` discriminator
+ * (camelCase of the class name) for switch-based narrowing. Constructor takes
+ * a single data-object parameter. All properties are readonly except explicit
+ * mutable flags (`retry`).
  *
  * All current events extend {@link HookableEvent} (which itself extends {@link StreamEvent}),
  * making them both streamable and subscribable via hook callbacks. {@link StreamEvent} exists
@@ -45,13 +45,13 @@ import type { ModelStreamEvent } from '../models/streaming.js'
  *
  * ## Field naming conventions
  *
- * | Field          | Usage                                       |
- * |----------------|---------------------------------------------|
- * | `agent`        | Present on every event (`AgentData`)         |
- * | `.event`       | Inner event in update wrappers               |
- * | `.result`      | Finished result object                       |
- * | `.message`     | Message object                               |
- * | `.contentBlock`| Content block object                         |
+ * | Field           | Usage                                            |
+ * |-----------------|--------------------------------------------------|
+ * | `agent`         | `LocalAgent` reference on all agent-loop events  |
+ * | `.event`        | Inner event in update wrappers                   |
+ * | `.result`       | Finished result object                           |
+ * | `.message`      | Message object                                   |
+ * | `.contentBlock` | Content block object                             |
  */
 
 /**
@@ -83,9 +83,9 @@ export abstract class HookableEvent extends StreamEvent {
  */
 export class InitializedEvent extends HookableEvent {
   readonly type = 'initializedEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
 
-  constructor(data: { agent: AgentData }) {
+  constructor(data: { agent: LocalAgent }) {
     super()
     this.agent = data.agent
   }
@@ -97,9 +97,9 @@ export class InitializedEvent extends HookableEvent {
  */
 export class BeforeInvocationEvent extends HookableEvent {
   readonly type = 'beforeInvocationEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
 
-  constructor(data: { agent: AgentData }) {
+  constructor(data: { agent: LocalAgent }) {
     super()
     this.agent = data.agent
   }
@@ -112,9 +112,9 @@ export class BeforeInvocationEvent extends HookableEvent {
  */
 export class AfterInvocationEvent extends HookableEvent {
   readonly type = 'afterInvocationEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
 
-  constructor(data: { agent: AgentData }) {
+  constructor(data: { agent: LocalAgent }) {
     super()
     this.agent = data.agent
   }
@@ -131,10 +131,10 @@ export class AfterInvocationEvent extends HookableEvent {
  */
 export class MessageAddedEvent extends HookableEvent {
   readonly type = 'messageAddedEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly message: Message
 
-  constructor(data: { agent: AgentData; message: Message }) {
+  constructor(data: { agent: LocalAgent; message: Message }) {
     super()
     this.agent = data.agent
     this.message = data.message
@@ -144,10 +144,11 @@ export class MessageAddedEvent extends HookableEvent {
 /**
  * Event triggered just before a tool is executed.
  * Fired after tool lookup but before execution begins.
+ * Hook callbacks can set {@link cancel} to prevent the tool from executing.
  */
 export class BeforeToolCallEvent extends HookableEvent {
   readonly type = 'beforeToolCallEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly toolUse: {
     name: string
     toolUseId: string
@@ -155,8 +156,15 @@ export class BeforeToolCallEvent extends HookableEvent {
   }
   readonly tool: Tool | undefined
 
+  /**
+   * Set by hook callbacks to cancel this tool call.
+   * When set to `true`, a default cancel message is used.
+   * When set to a string, that string is used as the tool result error message.
+   */
+  cancel: boolean | string = false
+
   constructor(data: {
-    agent: AgentData
+    agent: LocalAgent
     toolUse: { name: string; toolUseId: string; input: JSONValue }
     tool: Tool | undefined
   }) {
@@ -174,7 +182,7 @@ export class BeforeToolCallEvent extends HookableEvent {
  */
 export class AfterToolCallEvent extends HookableEvent {
   readonly type = 'afterToolCallEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly toolUse: {
     name: string
     toolUseId: string
@@ -191,7 +199,7 @@ export class AfterToolCallEvent extends HookableEvent {
   retry?: boolean
 
   constructor(data: {
-    agent: AgentData
+    agent: LocalAgent
     toolUse: { name: string; toolUseId: string; input: JSONValue }
     tool: Tool | undefined
     result: ToolResultBlock
@@ -218,9 +226,9 @@ export class AfterToolCallEvent extends HookableEvent {
  */
 export class BeforeModelCallEvent extends HookableEvent {
   readonly type = 'beforeModelCallEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
 
-  constructor(data: { agent: AgentData }) {
+  constructor(data: { agent: LocalAgent }) {
     super()
     this.agent = data.agent
   }
@@ -266,7 +274,7 @@ export interface ModelStopData {
  */
 export class AfterModelCallEvent extends HookableEvent {
   readonly type = 'afterModelCallEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly stopData?: ModelStopData
   readonly error?: Error
 
@@ -276,7 +284,7 @@ export class AfterModelCallEvent extends HookableEvent {
    */
   retry?: boolean
 
-  constructor(data: { agent: AgentData; stopData?: ModelStopData; error?: Error }) {
+  constructor(data: { agent: LocalAgent; stopData?: ModelStopData; error?: Error }) {
     super()
     this.agent = data.agent
     if (data.stopData !== undefined) {
@@ -300,10 +308,10 @@ export class AfterModelCallEvent extends HookableEvent {
  */
 export class ModelStreamUpdateEvent extends HookableEvent {
   readonly type = 'modelStreamUpdateEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly event: ModelStreamEvent
 
-  constructor(data: { agent: AgentData; event: ModelStreamEvent }) {
+  constructor(data: { agent: LocalAgent; event: ModelStreamEvent }) {
     super()
     this.agent = data.agent
     this.event = data.event
@@ -322,10 +330,10 @@ export class ModelStreamUpdateEvent extends HookableEvent {
  */
 export class ContentBlockEvent extends HookableEvent {
   readonly type = 'contentBlockEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly contentBlock: ContentBlock
 
-  constructor(data: { agent: AgentData; contentBlock: ContentBlock }) {
+  constructor(data: { agent: LocalAgent; contentBlock: ContentBlock }) {
     super()
     this.agent = data.agent
     this.contentBlock = data.contentBlock
@@ -338,11 +346,11 @@ export class ContentBlockEvent extends HookableEvent {
  */
 export class ModelMessageEvent extends HookableEvent {
   readonly type = 'modelMessageEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly message: Message
   readonly stopReason: StopReason
 
-  constructor(data: { agent: AgentData; message: Message; stopReason: StopReason }) {
+  constructor(data: { agent: LocalAgent; message: Message; stopReason: StopReason }) {
     super()
     this.agent = data.agent
     this.message = data.message
@@ -356,10 +364,10 @@ export class ModelMessageEvent extends HookableEvent {
  */
 export class ToolResultEvent extends HookableEvent {
   readonly type = 'toolResultEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly result: ToolResultBlock
 
-  constructor(data: { agent: AgentData; result: ToolResultBlock }) {
+  constructor(data: { agent: LocalAgent; result: ToolResultBlock }) {
     super()
     this.agent = data.agent
     this.result = data.result
@@ -377,10 +385,10 @@ export class ToolResultEvent extends HookableEvent {
  */
 export class ToolStreamUpdateEvent extends HookableEvent {
   readonly type = 'toolStreamUpdateEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly event: ToolStreamEvent
 
-  constructor(data: { agent: AgentData; event: ToolStreamEvent }) {
+  constructor(data: { agent: LocalAgent; event: ToolStreamEvent }) {
     super()
     this.agent = data.agent
     this.event = data.event
@@ -393,10 +401,10 @@ export class ToolStreamUpdateEvent extends HookableEvent {
  */
 export class AgentResultEvent extends HookableEvent {
   readonly type = 'agentResultEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly result: AgentResult
 
-  constructor(data: { agent: AgentData; result: AgentResult }) {
+  constructor(data: { agent: LocalAgent; result: AgentResult }) {
     super()
     this.agent = data.agent
     this.result = data.result
@@ -406,13 +414,21 @@ export class AgentResultEvent extends HookableEvent {
 /**
  * Event triggered before executing tools.
  * Fired when the model returns tool use blocks that need to be executed.
+ * Hook callbacks can set {@link cancel} to prevent all tools from executing.
  */
 export class BeforeToolsEvent extends HookableEvent {
   readonly type = 'beforeToolsEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly message: Message
 
-  constructor(data: { agent: AgentData; message: Message }) {
+  /**
+   * Set by hook callbacks to cancel all tool calls.
+   * When set to `true`, a default cancel message is used.
+   * When set to a string, that string is used as the tool result error message.
+   */
+  cancel: boolean | string = false
+
+  constructor(data: { agent: LocalAgent; message: Message }) {
     super()
     this.agent = data.agent
     this.message = data.message
@@ -426,10 +442,10 @@ export class BeforeToolsEvent extends HookableEvent {
  */
 export class AfterToolsEvent extends HookableEvent {
   readonly type = 'afterToolsEvent' as const
-  readonly agent: AgentData
+  readonly agent: LocalAgent
   readonly message: Message
 
-  constructor(data: { agent: AgentData; message: Message }) {
+  constructor(data: { agent: LocalAgent; message: Message }) {
     super()
     this.agent = data.agent
     this.message = data.message

@@ -1,4 +1,11 @@
-import { AgentResult, type AgentStreamEvent } from '../types/agent.js'
+import {
+  AgentResult,
+  type AgentStreamEvent,
+  type InvokableAgent,
+  type InvokeArgs,
+  type InvokeOptions,
+  type LocalAgent,
+} from '../types/agent.js'
 import { BedrockModel } from '../models/bedrock.js'
 import {
   contentBlockFromData,
@@ -22,9 +29,7 @@ import { Model } from '../models/model.js'
 import type { BaseModelConfig, StreamAggregatedResult, StreamOptions } from '../models/model.js'
 import { isModelStreamEvent } from '../models/streaming.js'
 import { ToolRegistry } from '../registry/tool-registry.js'
-import { AppState } from '../app-state.js'
-import type { AgentData } from '../types/agent.js'
-import type { AgentBase } from './agent-base.js'
+import { StateStore } from '../state-store.js'
 import { AgentPrinter, getDefaultAppender, type Printer } from './printer.js'
 import type { Plugin } from '../plugins/plugin.js'
 import { PluginRegistry } from '../plugins/registry.js'
@@ -106,7 +111,7 @@ export type AgentConfig = {
    */
   systemPrompt?: SystemPrompt | SystemPromptData
   /** Optional initial state values for the agent. */
-  state?: Record<string, JSONValue>
+  appState?: Record<string, JSONValue>
   /**
    * Enable automatic printing of agent output to console.
    * When true, prints text generation, reasoning, and tool usage as they occur.
@@ -150,26 +155,6 @@ export type AgentConfig = {
   id?: string
 }
 
-/**
- * Arguments for invoking an agent.
- *
- * Supports multiple input formats:
- * - `string` - User text input (wrapped in TextBlock, creates user Message)
- * - `ContentBlock[]` | `ContentBlockData[]` - Array of content blocks (creates single user Message)
- * - `Message[]` | `MessageData[]` - Array of messages (appends all to conversation)
- */
-export type InvokeArgs = string | ContentBlock[] | ContentBlockData[] | Message[] | MessageData[]
-
-/**
- * Options for a single agent invocation.
- */
-export interface InvokeOptions {
-  /**
-   * Zod schema for structured output validation, overriding the constructor-provided schema for this invocation only.
-   */
-  structuredOutputSchema?: z.ZodSchema
-}
-
 /** Default name assigned to agents when none is provided. */
 const DEFAULT_AGENT_NAME = 'Strands Agent'
 
@@ -181,9 +166,7 @@ const DEFAULT_AGENT_ID = 'agent'
  * The Agent is responsible for managing the lifecycle of tools and clients
  * and invoking the core decision-making loop.
  */
-export class Agent implements AgentData, AgentBase {
-  readonly type = 'agent' as const
-
+export class Agent implements LocalAgent, InvokableAgent {
   /**
    * The conversation history of messages between user and assistant.
    */
@@ -192,7 +175,7 @@ export class Agent implements AgentData, AgentBase {
    * App state storage accessible to tools and application logic.
    * State is not passed to the model during inference.
    */
-  public readonly state: AppState
+  public readonly appState: StateStore
   private readonly _conversationManager: ConversationManager
 
   /**
@@ -240,7 +223,7 @@ export class Agent implements AgentData, AgentBase {
   constructor(config?: AgentConfig) {
     // Initialize public fields
     this.messages = (config?.messages ?? []).map((msg) => (msg instanceof Message ? msg : Message.fromMessageData(msg)))
-    this.state = new AppState(config?.state)
+    this.appState = new StateStore(config?.appState)
     this._conversationManager = config?.conversationManager ?? new SlidingWindowConversationManager({ windowSize: 40 })
     this.name = config?.name ?? DEFAULT_AGENT_NAME
     this.id = config?.id ?? DEFAULT_AGENT_ID
@@ -512,8 +495,16 @@ export class Agent implements AgentData, AgentBase {
         })
 
         try {
-          const modelResult = yield* this.invokeModel(currentArgs, forcedToolChoice)
-          currentArgs = undefined // Only pass args on first invocation
+          // Normalize input and append user messages on first invocation only
+          if (currentArgs !== undefined) {
+            const messagesToAppend = this._normalizeInput(currentArgs)
+            for (const message of messagesToAppend) {
+              yield this._appendMessage(message)
+            }
+            currentArgs = undefined
+          }
+
+          const modelResult = yield* this.invokeModel(forcedToolChoice)
           const wasForced = forcedToolChoice !== undefined
           forcedToolChoice = undefined // Clear after use
 
@@ -677,15 +668,8 @@ export class Agent implements AgentData, AgentBase {
    * @returns Object containing the assistant message, stop reason, and optional redaction message
    */
   private async *invokeModel(
-    args?: InvokeArgs,
     forcedToolChoice?: ToolChoice
   ): AsyncGenerator<AgentStreamEvent, StreamAggregatedResult, undefined> {
-    // Normalize input and append messages to conversation
-    const messagesToAppend = this._normalizeInput(args)
-    for (const message of messagesToAppend) {
-      yield this._appendMessage(message)
-    }
-
     const toolSpecs = this._toolRegistry.list().map((tool) => tool.toolSpec)
     const streamOptions: StreamOptions = { toolSpecs }
     if (this.systemPrompt !== undefined) {
@@ -704,6 +688,7 @@ export class Agent implements AgentData, AgentBase {
     const modelSpan = this._tracer.startModelInvokeSpan({
       messages: this.messages,
       ...(modelId && { modelId }),
+      ...(this.systemPrompt !== undefined && { systemPrompt: this.systemPrompt }),
     })
 
     try {
@@ -714,10 +699,12 @@ export class Agent implements AgentData, AgentBase {
 
       // End model span with usage
       const usage = result.metadata?.usage
+      const metrics = result.metadata?.metrics
       this._tracer.endModelInvokeSpan(modelSpan, {
         output: result.message,
         stopReason: result.stopReason,
         ...(usage && { usage }),
+        ...(metrics && { metrics }),
       })
 
       yield new ModelMessageEvent({ agent: this, message: result.message, stopReason: result.stopReason })
@@ -737,7 +724,7 @@ export class Agent implements AgentData, AgentBase {
       yield afterModelCallEvent
 
       if (afterModelCallEvent.retry) {
-        return yield* this.invokeModel(args)
+        return yield* this.invokeModel(forcedToolChoice)
       }
 
       return result
@@ -755,7 +742,7 @@ export class Agent implements AgentData, AgentBase {
 
       // After yielding, hooks have been invoked and may have set retry
       if (errorEvent.retry) {
-        return yield* this.invokeModel(args)
+        return yield* this.invokeModel(forcedToolChoice)
       }
 
       // Re-throw error
@@ -814,7 +801,8 @@ export class Agent implements AgentData, AgentBase {
     assistantMessage: Message,
     toolRegistry: ToolRegistry
   ): AsyncGenerator<AgentStreamEvent, Message, undefined> {
-    yield new BeforeToolsEvent({ agent: this, message: assistantMessage })
+    const beforeToolsEvent = new BeforeToolsEvent({ agent: this, message: assistantMessage })
+    yield beforeToolsEvent
 
     // Extract tool use blocks from assistant message
     const toolUseBlocks = assistantMessage.content.filter(
@@ -824,6 +812,25 @@ export class Agent implements AgentData, AgentBase {
     if (toolUseBlocks.length === 0) {
       // No tool use blocks found even though stopReason is toolUse
       throw new Error('Model indicated toolUse but no tool use blocks found in message')
+    }
+
+    // Cancel all tools if hook requested it
+    if (beforeToolsEvent.cancel) {
+      const cancelMessage = cancelToolMessage(beforeToolsEvent.cancel)
+      const toolResultBlocks = toolUseBlocks.map(
+        (block) =>
+          new ToolResultBlock({
+            toolUseId: block.toolUseId,
+            status: 'error',
+            content: [new TextBlock(cancelMessage)],
+          })
+      )
+      for (const result of toolResultBlocks) {
+        yield new ToolResultEvent({ agent: this, result })
+      }
+      const toolResultMessage = new Message({ role: 'user', content: toolResultBlocks })
+      yield new AfterToolsEvent({ agent: this, message: toolResultMessage })
+      return toolResultMessage
     }
 
     const toolResultBlocks: ToolResultBlock[] = []
@@ -872,7 +879,29 @@ export class Agent implements AgentData, AgentBase {
 
     // Retry loop for tool execution
     while (true) {
-      yield new BeforeToolCallEvent({ agent: this, toolUse, tool })
+      const beforeToolCallEvent = new BeforeToolCallEvent({ agent: this, toolUse, tool })
+      yield beforeToolCallEvent
+
+      // Cancel individual tool if hook requested it
+      if (beforeToolCallEvent.cancel) {
+        const cancelMessage = cancelToolMessage(beforeToolCallEvent.cancel)
+        const toolResult = new ToolResultBlock({
+          toolUseId: toolUseBlock.toolUseId,
+          status: 'error',
+          content: [new TextBlock(cancelMessage)],
+        })
+        const afterToolCallEvent = new AfterToolCallEvent({
+          agent: this,
+          toolUse,
+          tool,
+          result: toolResult,
+        })
+        yield afterToolCallEvent
+        if (afterToolCallEvent.retry) {
+          continue
+        }
+        return toolResult
+      }
 
       // Start tool span within loop span context
       const toolSpan = this._tracer.startToolCallSpan({
@@ -1029,6 +1058,15 @@ export class Agent implements AgentData, AgentBase {
     this.messages.push(message)
     return new MessageAddedEvent({ agent: this, message })
   }
+}
+
+/**
+ * Returns the cancel message for a cancelled tool.
+ * @param cancelTool - The cancel value (true or custom message)
+ * @returns The cancel message string
+ */
+function cancelToolMessage(cancelTool: true | string): string {
+  return typeof cancelTool === 'string' ? cancelTool : 'tool cancelled by hook'
 }
 
 /**

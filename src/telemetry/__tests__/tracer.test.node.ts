@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Span, SpanAttributeValue } from '@opentelemetry/api'
 import { SpanStatusCode, trace, context } from '@opentelemetry/api'
 import { Tracer } from '../tracer.js'
-import { Message, TextBlock, ToolResultBlock, ToolUseBlock } from '../../types/messages.js'
+import { Message, TextBlock, ToolResultBlock, ToolUseBlock, CachePointBlock } from '../../types/messages.js'
 import { MockSpan, eventAttr } from '../../__fixtures__/mock-span.js'
 import { textMessage } from '../../__fixtures__/agent-helpers.js'
 
@@ -33,7 +33,7 @@ describe('Tracer', () => {
     vi.stubEnv('OTEL_SEMCONV_STABILITY_OPT_IN', '')
   })
 
-  /** Get the [spanName, options] from the first startSpan call. */
+  /** Get the [spanName, options] from the startSpan call for the span under test. */
   function getStartSpanCall(): [string, { attributes: Record<string, SpanAttributeValue | undefined> }] {
     return mockStartSpan.mock.calls[0] as [string, { attributes: Record<string, SpanAttributeValue | undefined> }]
   }
@@ -699,6 +699,157 @@ describe('Tracer', () => {
       const userEvents = mockSpan.getEvents('gen_ai.user.message')
       const parsed = JSON.parse(eventAttr(userEvents[0]!, 'content'))
       expect(parsed[0].text).toBe('Hello world')
+    })
+  })
+
+  describe('system prompt on chat spans', () => {
+    it('emits gen_ai.system.message event with stable conventions', () => {
+      const tracer = new Tracer()
+
+      tracer.startModelInvokeSpan({
+        messages: [textMessage('user', 'Hello')],
+        modelId: 'test-model',
+        systemPrompt: 'You are a helpful assistant',
+      })
+
+      const systemEvents = mockSpan.getEvents('gen_ai.system.message')
+      expect(systemEvents).toHaveLength(1)
+      expect(JSON.parse(eventAttr(systemEvents[0]!, 'content'))).toStrictEqual([
+        { text: 'You are a helpful assistant' },
+      ])
+    })
+
+    it('emits gen_ai.system_instructions with latest conventions', () => {
+      vi.stubEnv('OTEL_SEMCONV_STABILITY_OPT_IN', 'gen_ai_latest_experimental')
+      const tracer = new Tracer()
+
+      tracer.startModelInvokeSpan({
+        messages: [textMessage('user', 'Hello')],
+        modelId: 'test-model',
+        systemPrompt: 'You are a calculator assistant',
+      })
+
+      const detailEvents = mockSpan.getEvents('gen_ai.client.inference.operation.details')
+      const systemEvent = detailEvents.find((e) => eventAttr(e, 'gen_ai.system_instructions'))
+      expect(systemEvent).toBeDefined()
+      expect(JSON.parse(eventAttr(systemEvent!, 'gen_ai.system_instructions'))).toStrictEqual([
+        { type: 'text', content: 'You are a calculator assistant' },
+      ])
+    })
+
+    it('does not emit system prompt event when systemPrompt is undefined', () => {
+      const tracer = new Tracer()
+
+      tracer.startModelInvokeSpan({
+        messages: [textMessage('user', 'Hello')],
+        modelId: 'test-model',
+      })
+
+      const systemEvents = mockSpan.getEvents('gen_ai.system.message')
+      expect(systemEvents).toHaveLength(0)
+    })
+
+    it('handles SystemContentBlock array with cache points in latest conventions', () => {
+      vi.stubEnv('OTEL_SEMCONV_STABILITY_OPT_IN', 'gen_ai_latest_experimental')
+      const tracer = new Tracer()
+
+      tracer.startModelInvokeSpan({
+        messages: [textMessage('user', 'Hello')],
+        modelId: 'test-model',
+        systemPrompt: [new TextBlock('You are helpful'), new CachePointBlock({ cacheType: 'default' })],
+      })
+
+      const detailEvents = mockSpan.getEvents('gen_ai.client.inference.operation.details')
+      const systemEvent = detailEvents.find((e) => eventAttr(e, 'gen_ai.system_instructions'))
+      expect(systemEvent).toBeDefined()
+      expect(JSON.parse(eventAttr(systemEvent!, 'gen_ai.system_instructions'))).toStrictEqual([
+        { type: 'text', content: 'You are helpful' },
+        { type: 'cache_point', cacheType: 'default' },
+      ])
+    })
+
+    it('serializes SystemContentBlock array in stable conventions', () => {
+      const tracer = new Tracer()
+
+      tracer.startModelInvokeSpan({
+        messages: [textMessage('user', 'Hello')],
+        modelId: 'test-model',
+        systemPrompt: [new TextBlock('You are helpful'), new CachePointBlock({ cacheType: 'default' })],
+      })
+
+      const systemEvents = mockSpan.getEvents('gen_ai.system.message')
+      expect(systemEvents).toHaveLength(1)
+      const parsed = JSON.parse(eventAttr(systemEvents[0]!, 'content'))
+      expect(parsed).toHaveLength(2)
+      expect(parsed[0]).toStrictEqual({ text: 'You are helpful' })
+      expect(parsed[1]).toStrictEqual({ cachePoint: { cacheType: 'default' } })
+    })
+  })
+
+  describe('timeToFirstByteMs', () => {
+    it('does not set TTFB as span attribute (TTFB is a histogram metric, not a span attribute)', () => {
+      const tracer = new Tracer()
+      const span = tracer.startModelInvokeSpan({ messages: [textMessage('user', 'Hi')] })
+
+      tracer.endModelInvokeSpan(span, {
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        metrics: { latencyMs: 500, timeToFirstByteMs: 150 },
+      })
+
+      expect(mockSpan.getAttributeValue('gen_ai.server.time_to_first_token')).toBeUndefined()
+      expect(mockSpan.getAttributeValue('gen_ai.server.request.duration')).toBe(500)
+    })
+  })
+
+  describe('Langfuse detection', () => {
+    it('sets langfuse.observation.type on agent span when OTEL_EXPORTER_OTLP_ENDPOINT contains langfuse', () => {
+      vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://us.cloud.langfuse.com')
+      const tracer = new Tracer()
+      const span = tracer.startAgentSpan({ messages: [textMessage('user', 'Hi')], agentName: 'agent' })
+
+      tracer.endAgentSpan(span, {
+        accumulatedUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+      })
+
+      expect(mockSpan.getAttributeValue('langfuse.observation.type')).toBe('span')
+    })
+
+    it('sets langfuse.observation.type when OTEL_EXPORTER_OTLP_TRACES_ENDPOINT contains langfuse', () => {
+      vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'https://us.cloud.langfuse.com/api/public/otel/v1/traces')
+      const tracer = new Tracer()
+      const span = tracer.startAgentSpan({ messages: [textMessage('user', 'Hi')], agentName: 'agent' })
+
+      tracer.endAgentSpan(span, {
+        accumulatedUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+      })
+
+      expect(mockSpan.getAttributeValue('langfuse.observation.type')).toBe('span')
+    })
+
+    it('sets langfuse.observation.type when LANGFUSE_BASE_URL is set', () => {
+      vi.stubEnv('LANGFUSE_BASE_URL', 'https://self-hosted.example.com')
+      const tracer = new Tracer()
+      const span = tracer.startAgentSpan({ messages: [textMessage('user', 'Hi')], agentName: 'agent' })
+
+      tracer.endAgentSpan(span, {
+        accumulatedUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+      })
+
+      expect(mockSpan.getAttributeValue('langfuse.observation.type')).toBe('span')
+    })
+
+    it('does not set langfuse.observation.type when no langfuse env vars are set', () => {
+      vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '')
+      vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', '')
+      vi.stubEnv('LANGFUSE_BASE_URL', '')
+      const tracer = new Tracer()
+      const span = tracer.startAgentSpan({ messages: [textMessage('user', 'Hi')], agentName: 'agent' })
+
+      tracer.endAgentSpan(span, {
+        accumulatedUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+      })
+
+      expect(mockSpan.getAttributeValue('langfuse.observation.type')).toBeUndefined()
     })
   })
 

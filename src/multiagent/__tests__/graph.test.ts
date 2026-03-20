@@ -3,7 +3,7 @@ import { Agent } from '../../agent/agent.js'
 import { MockMessageModel } from '../../__fixtures__/mock-message-model.js'
 import { collectGenerator } from '../../__fixtures__/model-test-helpers.js'
 import { AfterNodeCallEvent, BeforeNodeCallEvent, MultiAgentInitializedEvent } from '../events.js'
-import { TextBlock } from '../../types/messages.js'
+import { TextBlock, type ContentBlockData } from '../../types/messages.js'
 import { Status, MultiAgentState } from '../state.js'
 import { AgentNode, MultiAgentNode } from '../nodes.js'
 import { Graph } from '../graph.js'
@@ -34,7 +34,7 @@ describe('Graph', () => {
 
     it('accepts agent node options', () => {
       const graph = new Graph({
-        nodes: [{ type: 'agent', agent: makeAgent('a') }],
+        nodes: [{ agent: makeAgent('a') }],
         edges: [],
       })
       expect(graph.nodes.get('a')).toBeInstanceOf(AgentNode)
@@ -315,6 +315,24 @@ describe('Graph', () => {
       expect(input.map((b) => b.text)).toStrictEqual(['task-input', '[node: a]', 'from-a'])
     })
 
+    it('converts ContentBlockData[] input to ContentBlock instances for downstream nodes', async () => {
+      const agentB = makeAgent('b')
+      const streamSpy = vi.spyOn(agentB, 'stream')
+
+      const graph = new Graph({
+        nodes: [makeAgent('a', 'from-a'), agentB],
+        edges: [['a', 'b']],
+      })
+
+      const dataInput: ContentBlockData[] = [{ text: 'data-input' }]
+      await graph.invoke(dataInput)
+
+      expect(streamSpy).toHaveBeenCalled()
+      const input = streamSpy.mock.calls[0]![0] as TextBlock[]
+      expect(input[0]).toBeInstanceOf(TextBlock)
+      expect(input.map((b) => b.text)).toStrictEqual(['data-input', '[node: a]', 'from-a'])
+    })
+
     it('returns failed result when agent throws', async () => {
       const model = new MockMessageModel().addTurn(new Error('agent exploded'))
       const agent = new Agent({ model, printer: false, id: 'a' })
@@ -412,7 +430,7 @@ describe('Graph', () => {
     it('preserves agent messages and state after execution', async () => {
       const agent = makeAgent('a', 'reply')
       const messagesBefore = [...agent.messages]
-      const stateBefore = agent.state.getAll()
+      const stateBefore = agent.appState.getAll()
 
       const graph = new Graph({
         nodes: [agent],
@@ -422,7 +440,7 @@ describe('Graph', () => {
       await graph.invoke('hello')
 
       expect(agent.messages).toStrictEqual(messagesBefore)
-      expect(agent.state.getAll()).toStrictEqual(stateBefore)
+      expect(agent.appState.getAll()).toStrictEqual(stateBefore)
     })
 
     it('executes join node exactly once when all parents complete concurrently', async () => {

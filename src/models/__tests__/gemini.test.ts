@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { GoogleGenAI, FunctionCallingConfigMode, type GenerateContentResponse } from '@google/genai'
 import { collectIterator } from '../../__fixtures__/model-test-helpers.js'
 import { GeminiModel } from '../gemini/model.js'
-import { ContextWindowOverflowError } from '../../errors.js'
+import { ContextWindowOverflowError, ModelThrottledError } from '../../errors.js'
 import {
   Message,
   CachePointBlock,
@@ -268,6 +268,50 @@ describe('GeminiModel', () => {
       await expect(collectIterator(provider.stream(messages))).rejects.toThrow(ContextWindowOverflowError)
     })
 
+    it('throws ModelThrottledError for RESOURCE_EXHAUSTED status', async () => {
+      const mockClient = {
+        models: {
+          generateContentStream: vi.fn(async () => {
+            throw new Error(
+              JSON.stringify({
+                error: {
+                  status: 'RESOURCE_EXHAUSTED',
+                  message: 'Quota exceeded for the model',
+                },
+              })
+            )
+          }),
+        },
+      } as unknown as GoogleGenAI
+
+      const provider = new GeminiModel({ client: mockClient })
+      const messages = [new Message({ role: 'user', content: [new TextBlock('Hi')] })]
+
+      await expect(collectIterator(provider.stream(messages))).rejects.toThrow(ModelThrottledError)
+    })
+
+    it('throws ModelThrottledError for UNAVAILABLE status', async () => {
+      const mockClient = {
+        models: {
+          generateContentStream: vi.fn(async () => {
+            throw new Error(
+              JSON.stringify({
+                error: {
+                  status: 'UNAVAILABLE',
+                  message: 'Service temporarily unavailable',
+                },
+              })
+            )
+          }),
+        },
+      } as unknown as GoogleGenAI
+
+      const provider = new GeminiModel({ client: mockClient })
+      const messages = [new Message({ role: 'user', content: [new TextBlock('Hi')] })]
+
+      await expect(collectIterator(provider.stream(messages))).rejects.toThrow(ModelThrottledError)
+    })
+
     it('rethrows unrecognized errors', async () => {
       const mockClient = {
         models: {
@@ -368,7 +412,7 @@ describe('GeminiModel', () => {
 
         const imageBlock = new ImageBlock({
           format: 'png',
-          source: { s3Location: { uri: 's3://test/image.png' } },
+          source: { location: { type: 's3', uri: 's3://test/image.png' } },
         })
 
         const contents = formatBlock(imageBlock)

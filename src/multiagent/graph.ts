@@ -1,6 +1,7 @@
-import type { InvokeArgs } from '../agent/agent.js'
+import type { InvokableAgent } from '../types/agent.js'
+import type { MultiAgentInput } from './multiagent.js'
 import type { ContentBlock } from '../types/messages.js'
-import { TextBlock } from '../types/messages.js'
+import { TextBlock, contentBlockFromData } from '../types/messages.js'
 import { HookableEvent } from '../hooks/events.js'
 import { HookRegistryImplementation } from '../hooks/registry.js'
 import type { HookCallback, HookableEventConstructor, HookCleanup } from '../hooks/types.js'
@@ -9,7 +10,8 @@ import { MultiAgentPluginRegistry } from './plugins.js'
 import type { NodeDefinition } from './nodes.js'
 import { AgentNode, MultiAgentNode, Node } from './nodes.js'
 import { MultiAgentState, MultiAgentResult, NodeResult, Status } from './state.js'
-import type { MultiAgentBase } from './base.js'
+import type { MultiAgent } from './multiagent.js'
+import { Swarm } from './swarm.js'
 import type { MultiAgentStreamEvent } from './events.js'
 import {
   AfterMultiAgentInvocationEvent,
@@ -71,7 +73,7 @@ export interface GraphOptions extends GraphConfig {
  * - Agent nodes are stateless by default (snapshot/restore on each execution). Python
  *   accumulates agent state across executions unless `reset_on_revisit` is enabled.
  * - Node failures produce a FAILED result, allowing parallel paths to continue.
- *   Orchestrator-level limits (maxSteps) throw exceptions. Python does the inverse:
+ *   MultiAgent-level limits (maxSteps) throw exceptions. Python does the inverse:
  *   node failures throw exceptions (fail-fast), while limit violations return a
  *   FAILED result.
  *
@@ -85,9 +87,7 @@ export interface GraphOptions extends GraphConfig {
  * const result = await graph.invoke('Explain quantum computing')
  * ```
  */
-export class Graph implements MultiAgentBase {
-  readonly type = 'multiAgent' as const
-
+export class Graph implements MultiAgent {
   readonly id: string
   readonly nodes: ReadonlyMap<string, Node>
   readonly edges: readonly Edge[]
@@ -135,7 +135,7 @@ export class Graph implements MultiAgentBase {
    * @param input - The input to pass to entry point nodes
    * @returns Promise resolving to the final MultiAgentResult
    */
-  async invoke(input: InvokeArgs): Promise<MultiAgentResult> {
+  async invoke(input: MultiAgentInput): Promise<MultiAgentResult> {
     const gen = this.stream(input)
     let next = await gen.next()
     while (!next.done) {
@@ -162,7 +162,7 @@ export class Graph implements MultiAgentBase {
    * @param input - The input to pass to entry nodes
    * @returns Async generator yielding streaming events and returning a MultiAgentResult
    */
-  async *stream(input: InvokeArgs): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined> {
+  async *stream(input: MultiAgentInput): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined> {
     await this.initialize()
 
     const gen = this._stream(input)
@@ -181,7 +181,7 @@ export class Graph implements MultiAgentBase {
     }
   }
 
-  private async *_stream(input: InvokeArgs): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined> {
+  private async *_stream(input: MultiAgentInput): AsyncGenerator<MultiAgentStreamEvent, MultiAgentResult, undefined> {
     const state = new MultiAgentState({ nodeIds: [...this.nodes.keys()] })
 
     const queue = new Queue()
@@ -252,7 +252,7 @@ export class Graph implements MultiAgentBase {
   /**
    * Executes a single node, pushing streaming events to the shared queue in real-time.
    */
-  private async _streamNode(node: Node, input: InvokeArgs, state: MultiAgentState, queue: Queue): Promise<void> {
+  private async _streamNode(node: Node, input: MultiAgentInput, state: MultiAgentState, queue: Queue): Promise<void> {
     const nodeState = state.node(node.id)!
 
     const beforeEvent = new BeforeNodeCallEvent({ orchestrator: this, state, nodeId: node.id })
@@ -360,14 +360,14 @@ export class Graph implements MultiAgentBase {
 
       if (definition instanceof Node) {
         node = definition
-      } else if ('agent' in definition) {
-        node = new AgentNode(definition)
       } else if ('orchestrator' in definition) {
         node = new MultiAgentNode(definition)
-      } else if (definition.type === 'agent') {
-        node = new AgentNode({ agent: definition })
-      } else {
+      } else if ('agent' in definition) {
+        node = new AgentNode(definition)
+      } else if (definition instanceof Graph || definition instanceof Swarm) {
         node = new MultiAgentNode({ orchestrator: definition })
+      } else {
+        node = new AgentNode({ agent: definition as InvokableAgent })
       }
 
       if (nodes.has(node.id)) {
@@ -437,7 +437,7 @@ export class Graph implements MultiAgentBase {
   /**
    * Builds the input for a node by combining the original task with dependency outputs.
    */
-  private _resolveNodeInput(node: Node, input: InvokeArgs, state: MultiAgentState): InvokeArgs {
+  private _resolveNodeInput(node: Node, input: MultiAgentInput, state: MultiAgentState): MultiAgentInput {
     const deps: ContentBlock[] = []
     for (const edge of this.edges.filter((e) => e.target.id === node.id)) {
       const ns = state.node(edge.source.id)!
@@ -448,7 +448,10 @@ export class Graph implements MultiAgentBase {
 
     if (deps.length === 0) return input
 
-    const blocks: ContentBlock[] = typeof input === 'string' ? [new TextBlock(input)] : (input as ContentBlock[])
+    const blocks =
+      typeof input === 'string'
+        ? [new TextBlock(input)]
+        : input.map((b) => ('type' in b ? (b as ContentBlock) : contentBlockFromData(b)))
     return [...blocks, ...deps]
   }
 
